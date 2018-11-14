@@ -1,0 +1,343 @@
+#!/usr/bin/env bash
+#
+# vimget -- like wget for vim plugins
+
+# {{{ bash options
+
+set -Eeuo pipefail # fail on errors, even within pipes
+shopt -s xpg_echo  # expand backslash escapes in echo automatically (ie \n)
+
+trap _handle_err ERR
+trap _on_exit    EXIT
+
+# }}} /bash options
+
+# {{{ global variables
+
+_VERSION='0.1'
+_ME="$(basename "$0")"
+_VIM_PLUGINS_PATH="$HOME/.vim/bundle"
+
+#   {{{ set based on input
+
+# github url
+_URL=""
+
+# plugin name
+_PLUGIN=""
+
+# path to the plugin we just installed
+_PLUGIN_PATH=""
+
+# quiet mode
+_QUIET=""
+
+# color mode
+_COLOR="on"
+
+#    }}} / set based on input
+
+#    {{{ exit codes
+
+_CODE_SUC=0      # success
+_CODE_ERR=1      # error
+_CODE_DEP=102    # unmet dependency
+_CODE_USR=103    # invalid input
+_TRAPPED_CODE="" # for storing a trapped exit code
+
+#    }}} / exit codes
+
+# }}} / global variables
+
+usage() {
+  local -i code=${1}
+  [[ -z "$code" ]] && code=$_CODE_SUC
+
+cat <<HELPTEXT
+usage: ${_ME} [-q|-n] <repo url>
+options:
+  -q  quiet mode
+  -n  no colors
+
+${_ME} ${_VERSION} -- like wget for vim plugins
+HELPTEXT
+
+  exit $code
+}
+
+_handle_err() {
+  _TRAPPED_CODE="$?"
+  if [[ ! "$_TRAPPED_CODE" =~ ^[$_CODE_DEP|$_CODE_USR]$ ]]; then
+    msg -c red "ERROR: $_TRAPPED_CODE"
+    _trace
+    exit $_CODE_ERR
+  fi
+}
+
+_on_exit() {
+  printf "$(color reset)"
+  goodbye
+}
+
+_trace() {
+  local frame=0
+  local line
+
+  while line="$(caller $frame)"; do
+    echo "$line" | awk '{ printf "%s:%s() at %s\n", $3, $2, $1 }'
+    ((frame++));
+  done
+}
+
+err() {
+  local -i code="${1}" ; shift
+  [[ -z "$code" ]] && code=$_CODE_ERR
+  local message="$@"
+  printf "$(color red)ERROR:$(color reset) $message\n"
+
+  exit $code
+}
+
+verify_vim() {
+  [[ -z "$(type -t vim)" ]] && err $_CODE_DEP "vim not found"
+  return 0
+}
+
+verify_git() {
+  [[ -z "$(type -t git)" ]] && err $_CODE_DEP "git not found"
+  return 0
+}
+
+verify_dot_vim() {
+  [[ -e "${_VIM_PLUGINS_PATH}" && ! -d "${_VIM_PLUGINS_PATH}" ]] && err $_CODE_DEP "${_VIM_PLUGINS_PATH} found, but not a directory. Exiting."
+
+  if [[ ! -d "${_VIM_PLUGINS_PATH}" ]]; then
+    offer_make_missing_dirs
+  fi
+
+  return 0
+}
+
+verify_plugin_not_installed() {
+  if [[ -e "${_PLUGIN_PATH}" ]]; then
+    err $_CODE_DEP "Plugin already installed at: ${_PLUGIN_PATH}"
+  fi
+
+  return 0
+}
+
+offer_make_missing_dirs() {
+  local input
+  read -p "${_VIM_PLUGINS_PATH} not found. Would you like me to create it? [y/N] " input
+
+  case "$input" in
+    y|Y)
+      create_dot_vim
+      ;;
+    n|N)
+      err $_CODE_DEP "Cannot proceed without ${_VIM_PLUGINS_PATH}"
+      ;;
+    *)
+      printf "Please type either 'y' or 'n'.\n"
+      offer_make_missing_dirs
+      ;;
+  esac
+}
+
+create_dot_vim() {
+  msg -c magenta "creating plugin dir" -c grey "> mkdir -p \"${_VIM_PLUGINS_PATH}\""
+  printf $(color grey)
+  mkdir -p "${_VIM_PLUGINS_PATH}"
+  printf $(color reset)
+}
+
+fetch_plugin() {
+  local flag=""
+  [[ -n "$_QUIET" ]] && flag=" --quiet"
+
+  cd "${_VIM_PLUGINS_PATH}"
+  msg -c magenta "fetching plugin" -c grey "> git clone${flag} --depth 1 \"${_URL}\""
+  printf $(color grey)
+  git clone ${flag} --depth 1 "${_URL}"
+  printf $(color reset)
+}
+
+helptags() {
+  find ${_PLUGIN_PATH} -type d -name doc -print0 | while IFS= read -d $'\0' docpath ; do
+    msg -c magenta "generating helptags" -c grey "> vim -e -c \":helptags ${docpath}\" -c ':q'"
+    printf $(color grey)
+    vim -e -c ":helptags ${docpath}" -c ':q'
+    printf $(color reset)
+  done
+}
+
+verify_env() {
+  verify_git
+  verify_vim
+  verify_dot_vim
+  verify_plugin_not_installed
+}
+
+color() {
+  [[ ! "$TERM" =~ color ]] && return 0
+  [[ "${_COLOR}" == "off" ]] && return 0
+
+  local color="${1}"
+  local code=""
+
+  case "${color}" in
+    red)
+      code='31'
+      ;;
+    green)
+      code='32'
+      ;;
+    yellow)
+      code='33'
+      ;;
+    blue)
+      code='34'
+      ;;
+    magenta)
+      code='35'
+      ;;
+    cyan)
+      code='36'
+      ;;
+    grey)
+      code='90'
+      ;;
+    reset)
+      code='39'
+      ;;
+  esac
+
+  printf "\033[${code}m"
+}
+
+# msg <string>
+# msg -c <color> <sring>
+# msg <string> <string> -c color <string>
+msg() {
+  [[ -n "${_QUIET}" ]] && return 0
+  local color_code=""
+
+  while [[ $# -ne 0 ]]; do
+    case $1 in
+      -c)
+        printf "$(color ${2})${3}$(color reset)\n"
+        shift 2
+        ;;
+      *)
+        printf "${1}\n"
+        ;;
+    esac
+    shift
+  done
+}
+
+# valid inputs to git clone:
+# (see git help clone)
+#  - ssh://[user@]host.xz[:port]/path/to/repo.git/
+#  - git://host.xz[:port]/path/to/repo.git/
+#  - http[s]://host.xz[:port]/path/to/repo.git/
+#  - ftp[s]://host.xz[:port]/path/to/repo.git/
+#  - [user@]host.xz:path/to/repo.git/
+#  - ssh://[user@]host.xz[:port]/~[user]/path/to/repo.git/
+#  - git://host.xz[:port]/~[user]/path/to/repo.git/
+#  - [user@]host.xz:/~[user]/path/to/repo.git/
+#  - /path/to/repo.git/
+#  - file:///path/to/repo.git/
+_extract_plugin_from_dot_git_url() {
+  printf "$1" | sed -nE 's/^.*\/([A-Za-z0-9_.-]+).git$/\1/p'
+}
+
+_extract_plugin_from_github_url() {
+  printf "$1" | sed -nE 's/^http[s]:\/\/github\.com\/[A-Za-z0-9_.-]\/?.*\/([A-Za-z0-9_.-]+)$/\1/p'
+}
+
+_extract_plugin_name_from_arg() {
+  local plugin=$(_extract_plugin_from_dot_git_url "$1")
+
+  if [[ -z "$plugin" ]]; then
+    plugin=$(_extract_plugin_from_github_url "$1")
+  fi
+
+  printf "$plugin"
+}
+
+# parse - parse the plugin name from the repo url
+#         and set global variables
+# usage: parse <url>
+parse() {
+  local url="${1}"
+  local name=$( _extract_plugin_name_from_arg "$url" )
+
+  [[ -z "$name" ]] && err _CODE_USR "Unable to recognize the format of '$url'. \nExpecting something that ends in /<plugin>.git\nWhere <plugin> is [A-Za-z0-9_.-]+"
+
+  _URL="${url}"
+  _PLUGIN="${name}"
+  _PLUGIN_PATH="${_VIM_PLUGINS_PATH}/${_PLUGIN}"
+}
+
+debug() {
+  local message="${@:-}"
+  c=$(caller 0)
+  msg "$(color yellow)DEBUG:$(color reset) $c $message\n"
+}
+
+handle_args() {
+  [[ $# -eq 0 ]] && usage $_CODE_USR
+
+  local arg
+
+  while [[ $# -ne 0 ]]; do
+    arg="$1"
+    case "${arg}" in
+      -nq|-qn)
+        _QUIET="true"
+        _COLOR="off"
+        ;;
+      -q)
+        _QUIET="true"
+        ;;
+      -n)
+        _COLOR="off"
+        ;;
+      *.git|*github*)
+        parse "${arg}"
+        ;;
+      *)
+        printf "$(color red)ERROR:$(color reset) invalid argument\n"
+        usage $_CODE_USR
+        ;;
+    esac
+    shift
+  done
+}
+
+hello() {
+  msg -c cyan "${_ME} > hello"
+}
+
+success() {
+  msg "$(color green)[SUCCESS]$(color reset) Plugin installed at ${_PLUGIN_PATH}"
+}
+
+goodbye() {
+  msg -c cyan "${_ME} > goodbye"
+}
+
+main() {
+  handle_args "${@:-}"
+
+  hello
+  verify_env
+  fetch_plugin
+  helptags
+  success
+}
+
+main "${@:-}"
+
+exit $_CODE_SUC
