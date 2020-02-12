@@ -1,232 +1,267 @@
 #!/usr/bin/env bash
 #
 # vimget -- like wget for vim plugins
+# shellcheck disable=SC2059
 
 # {{{ bash options
 
-set -Eeuo pipefail # fail on errors, even within pipes
+set -Eeo pipefail # fail on errors, even within pipes
 shopt -s xpg_echo  # expand backslash escapes in echo automatically (ie \n)
-
-trap _handle_err ERR
-trap _on_exit    EXIT
 
 # }}} /bash options
 
+# signal trapping {{{
+#
+
+vg:handle_err() {
+  local trapped_code="$?"
+  if [[ ! "$trapped_code" =~ ^[$code_env|$code_usr]$ ]]; then
+    vg:err "ERROR: $trapped_code"
+    vg:trace
+    exit $code_err
+  fi
+}
+
+trap vg:handle_err ERR
+
+#
+# }}} / signal trapping
+
 # {{{ global variables
 
-_VERSION='0.1'
-_ME="$(basename "$0")"
-_VIM_PLUGINS_PATH="$HOME/.vim/bundle"
-
-#   {{{ set based on input
-
-# github url
-_URL=""
-
-# plugin name
-_PLUGIN=""
-
-# path to the plugin we just installed
-_PLUGIN_PATH=""
-
-# quiet mode
-_QUIET=""
-
-# color mode
-_COLOR="on"
-
-#    }}} / set based on input
-
-#    {{{ exit codes
-
-_CODE_SUC=0      # success
-_CODE_ERR=1      # error
-_CODE_DEP=102    # unmet dependency
-_CODE_USR=103    # invalid input
-_TRAPPED_CODE="" # for storing a trapped exit code
-
-#    }}} / exit codes
+__me="${0##*/}"
+__args=( "${@}" )
 
 # }}} / global variables
 
+# usage {{{
+#
+
 usage() {
   local -i code=${1}
-  [[ -z "$code" ]] && code=$_CODE_SUC
+  [[ -z "$code" ]] && code=${code_suc} || :
 
 cat <<HELPTEXT
-usage: ${_ME} [-q|-n] <repo url>
+usage: ${__me} [-q|-n|-d-q] <repo url>
 options:
-  -q  quiet mode
-  -n  no colors
+  -n | --no-color
+  -d | --dry-run
+  -q | --quiet
+  -V | --verbose
 
-${_ME} ${_VERSION} -- like wget for vim plugins
+${__me} ${version} -- like wget for vim plugins
 HELPTEXT
 
   exit $code
 }
 
-_handle_err() {
-  _TRAPPED_CODE="$?"
-  if [[ ! "$_TRAPPED_CODE" =~ ^[$_CODE_DEP|$_CODE_USR]$ ]]; then
-    msg -c red "ERROR: $_TRAPPED_CODE"
-    _trace
-    exit $_CODE_ERR
-  fi
-}
+#
+# }}} / usage
 
-_on_exit() {
-  printf "$(color reset)"
-  goodbye
-}
+# error handling {{{
+#
 
-_trace() {
-  local frame=0
-  local line
+vg:trace() {
+  local frame=0 line file func
 
-  while line="$(caller $frame)"; do
-    echo "$line" | awk '{ printf "%s:%s() at %s\n", $3, $2, $1 }'
+  while read -r line func file < <(caller $frame); do
+    if [[ -z "${file}" ]]; then
+      file="${func}"
+      printf "%s:%s\n" "${file##*/}" "${line}"
+    else
+      printf "%s:%s in %s()\n" "${file##*/}" "${line}" "${func}"
+    fi
     ((frame++));
   done
 }
 
-err() {
-  local -i code="${1}" ; shift
-  [[ -z "$code" ]] && code=$_CODE_ERR
-  local message="$@"
-  printf "$(color red)ERROR:$(color reset) $message\n"
+vg:err() {
+  local line header="Error:" i=0
+
+  for line in "${@}"; do
+    [[ $i -gt 0 ]] && header="     >" || :
+
+    printf "$(vg:color red)%s$(vg:color reset) %s\n" "${header}" "${line}" >&2
+    : $(( i++ ))
+  done
+}
+
+vg:die() {
+  local -i code=${1} ; shift
+
+  if [[ $# -gt 0 ]]; then
+    vg:err "${@}"
+  fi
 
   exit $code
 }
 
-verify_vim() {
-  [[ -z "$(type -t vim)" ]] && err $_CODE_DEP "vim not found"
-  return 0
-}
+#
+# }}} / error handling
 
-verify_git() {
-  [[ -z "$(type -t git)" ]] && err $_CODE_DEP "git not found"
-  return 0
-}
+# environment checking {{{
+#
 
-verify_dot_vim() {
-  [[ -e "${_VIM_PLUGINS_PATH}" && ! -d "${_VIM_PLUGINS_PATH}" ]] && err $_CODE_DEP "${_VIM_PLUGINS_PATH} found, but not a directory. Exiting."
-
-  if [[ ! -d "${_VIM_PLUGINS_PATH}" ]]; then
-    offer_make_missing_dirs
-  fi
-
-  return 0
-}
-
-verify_plugin_not_installed() {
-  if [[ -e "${_PLUGIN_PATH}" ]]; then
-    err $_CODE_DEP "Plugin already installed at: ${_PLUGIN_PATH}"
-  fi
-
-  return 0
-}
-
-offer_make_missing_dirs() {
-  local input
-  read -p "${_VIM_PLUGINS_PATH} not found. Would you like me to create it? [y/N] " input
-
-  case "$input" in
-    y|Y)
-      create_dot_vim
-      ;;
-    n|N)
-      err $_CODE_DEP "Cannot proceed without ${_VIM_PLUGINS_PATH}"
-      ;;
-    *)
-      printf "Please type either 'y' or 'n'.\n"
-      offer_make_missing_dirs
-      ;;
-  esac
-}
-
-create_dot_vim() {
-  msg -c magenta "creating plugin dir" -c grey "> mkdir -p \"${_VIM_PLUGINS_PATH}\""
-  printf $(color grey)
-  mkdir -p "${_VIM_PLUGINS_PATH}"
-  printf $(color reset)
-}
-
-fetch_plugin() {
-  local flag=""
-  [[ -n "$_QUIET" ]] && flag=" --quiet"
-
-  cd "${_VIM_PLUGINS_PATH}"
-  msg -c magenta "fetching plugin" -c grey "> git clone${flag} --depth 1 \"${_URL}\""
-  printf $(color grey)
-  git clone ${flag} --depth 1 "${_URL}"
-  printf $(color reset)
-}
-
-helptags() {
-  find ${_PLUGIN_PATH} -type d -name doc -print0 | while IFS= read -d $'\0' docpath ; do
-    msg -c magenta "generating helptags" -c grey "> vim -e -c \":helptags ${docpath}\" -c ':q'"
-    printf $(color grey)
-    vim -e -c ":helptags ${docpath}" -c ':q'
-    printf $(color reset)
+vg:has() {
+  for pkg in "${@}"; do
+    if command -v "${pkg}" > /dev/null; then
+      return
+    fi
   done
+
+  return 1
 }
 
-verify_env() {
-  verify_git
-  verify_vim
-  verify_dot_vim
-  verify_plugin_not_installed
+vg:require_vim() {
+  if ! vg:has vim nvim; then
+    vg:die $code_env "vim not found"
+  fi
 }
 
-color() {
-  [[ ! "$TERM" =~ color ]] && return 0
-  [[ "${_COLOR}" == "off" ]] && return 0
+vg:require_git() {
+  if ! vg:has git; then
+    vg:die $code_env "git not found"
+  fi
+}
 
-  local color="${1}"
-  local code=""
+vg:find_duplicates() {
+  if [[ -e "${target_path}" ]]; then
+    vg:die $code_env "Plugin already installed at:" "${target_path}"
+  fi
+
+  return 0
+}
+
+vg:check_env() {
+  home_dir="$(cd -P $HOME && printf "%s" "$PWD")"
+  vg:require_git
+  vg:require_vim
+  vg:find_vimdir
+  vg:find_plugins_dir
+}
+
+vg:find_plugins_dir() {
+  local dir
+  local -a dirs=(                            \
+      "${VIM_PLUGINS_DIR:-#}"                \
+      "${user_vimdir:-#}/bundle"             \
+      "${user_vimdir:-#}/pack/start/bundle"  \
+  )
+
+  for dir in "${dirs[@]}"; do
+    if cd -P ${dir} 2> /dev/null; then
+      vim_plugins_dir="${PWD}"
+      break
+    fi
+  done
+
+  # shellcheck disable=SC2153
+  if [[ -n "${VIM_PLUGINS_DIR}" ]] && [[ "${VIM_PLUGINS_DIR}" != "${dir}" ]]; then
+    vg:die ${code_env} "Unable to access provided VIM_PLUGINS_DIR:" \
+      "${VIM_PLUGINS_DIR}"
+  fi
+
+
+  if [[ -z "${vim_plugins_dir}" ]]; then
+    vg:die ${code_env} "Unable to find plugins dir." \
+      "Please set the environment variable VIM_PLUGINS_DIR to continue."
+  fi
+
+  vg:config "plugins-dir" "${vim_plugins_dir}" "VIMDIR" "${user_vimdir}"
+}
+
+vg:find_vimdir() {
+  local dir
+  # the :-# pattern replaces any empty variables with "#"
+  # to avoid any unexpected behavior /paths
+  local -a dirs=(                       \
+      "${VIMDIR:-#}"                    \
+      "${HOME:-#}/.vim"                 \
+      "${HOME:-#}/vimfiles"             \
+      "${HOME:-#}/config/nvim"          \
+      "${HOME:-#}/AppData/Local/nvim"   \
+      "${XDG_CONFIG_HOME:-#}/nvim"      \
+  )
+
+  for dir in "${dirs[@]}"; do
+    if cd -P "${dir}" 2> /dev/null; then
+      user_vimdir="${PWD}"
+      break
+    fi
+  done
+
+  if [[ -n "${VIMDIR}" ]] && [[ "${VIMDIR}" != "${dir}" ]]; then
+    vg:die ${code_env} "Unable to access provided VIMDIR:" \
+      "${VIMDIR}"
+  fi
+
+  if [[ -z "${user_vimdir}" ]]; then
+    vg:die ${code_env} "Unable to find vimdir." \
+      "Please set the environment variable VIMDIR to continue."
+  fi
+
+  vg:config "vimdir" "${user_vimdir}" "HOME" "${HOME:-#}"
+}
+
+#
+# }}} / environment checking
+
+# printing output {{{
+#
+
+vg:color() {
+  [[ ! "$TERM" =~ color ]] && return || :
+  [[ "${color_mode}" == "off" ]] && return || :
+
+  local color="${1}" code=""
 
   case "${color}" in
-    red)
-      code='31'
-      ;;
-    green)
-      code='32'
-      ;;
-    yellow)
-      code='33'
-      ;;
-    blue)
-      code='34'
-      ;;
-    magenta)
-      code='35'
-      ;;
-    cyan)
-      code='36'
-      ;;
-    grey)
-      code='90'
-      ;;
-    reset)
-      code='39'
-      ;;
+    red)              code='31'   ;;
+    green)            code='32'   ;;
+    yellow)           code='33'   ;;
+    blue)             code='34'   ;;
+    magenta)          code='35'   ;;
+    cyan)             code='36'   ;;
+    grey)             code='90'   ;;
+    bright-red)       code='91'   ;;
+    bright-green)     code='92'   ;;
+    bright-yellow)    code='93'   ;;
+    bright-blue)      code='94'   ;;
+    bright-magenta)   code='95'   ;;
+    bright-cyan)      code='96'   ;;
+    reset)            code='39'   ;;
   esac
 
   printf "\033[${code}m"
 }
 
-# msg <string>
-# msg -c <color> <sring>
-# msg <string> <string> -c color <string>
-msg() {
-  [[ -n "${_QUIET}" ]] && return 0
-  local color_code=""
+# colorize and format output
+# -c <color>  -- print the following string(s) in color
+# -n <string> -- don't print a newline after <string>
+# printfx <string>
+# printfx -c <color> <sring>
+# printfx <string> <string> -c color <string> <string>
+# printfx -c <color> -n <string> -c <color> <string>
+vg:printfx() {
+  [[ -n "${quiet_mode}" ]] && return 0
+  local color_code="" toggle
 
   while [[ $# -ne 0 ]]; do
     case $1 in
       -c)
-        printf "$(color ${2})${3}$(color reset)\n"
-        shift 2
+        if [[ ! ${toggle} ]]; then
+          toggle="on"
+          vg:color "${2}"
+        else
+          toggle=
+          vg:color reset
+          vg:color "${2}"
+        fi
+        shift
+        ;;
+      -n)
+        printf "${2}"
+        shift
         ;;
       *)
         printf "${1}\n"
@@ -234,7 +269,38 @@ msg() {
     esac
     shift
   done
+
+  [[ "${toggle}" == "on" ]] && vg:color reset || :
 }
+
+vg:config() {
+  [[ ! ${verbose_mode} ]] && return || :
+
+  local name="${1}" val="${2}" pathname='$'"${3}" path="${4}"
+  local width1=12 width2=50 sep
+
+  sep="$(vg:printfx -c bright-blue -n "|")"
+
+  printf "${sep} %-*s ${sep} %-*s ${sep}\n" ${width1} "${name}" ${width2} "${val/$path/$pathname}"
+}
+
+vg:success() {
+  if [[ $dryrun_mode ]]; then
+    return
+  fi
+
+  vg:printfx "$(vg:color green)[SUCCESS]$(vg:color reset) Plugin installed at ${target_path}"
+}
+
+vg:debug() {
+  vg:printfx -c yellow -n "DEBUG:" -c reset  -n " " "${@}"
+}
+
+#
+# }}} / printing output
+
+# parsing input {{{
+#
 
 # valid inputs to git clone:
 # (see git help clone)
@@ -248,19 +314,20 @@ msg() {
 #  - [user@]host.xz:/~[user]/path/to/repo.git/
 #  - /path/to/repo.git/
 #  - file:///path/to/repo.git/
-_extract_plugin_from_dot_git_url() {
+vg:dot_git_uri_matcher() {
   printf "$1" | sed -nE 's/^.*\/([A-Za-z0-9_.-]+).git$/\1/p'
 }
 
-_extract_plugin_from_github_url() {
-  printf "$1" | sed -nE 's/^http[s]:\/\/github\.com\/[A-Za-z0-9_.-]\/?.*\/([A-Za-z0-9_.-]+)$/\1/p'
+vg:github_uri_matcher() {
+  printf "$1" | sed -nE 's/^http[s]?:\/\/github\.com\/[A-Za-z0-9_.-]\/?.*\/([A-Za-z0-9_.-]+)$/\1/p'
 }
 
-_extract_plugin_name_from_arg() {
-  local plugin=$(_extract_plugin_from_dot_git_url "$1")
+vg:extract_plugin_name() {
+  local plugin
+  plugin=$(vg:dot_git_uri_matcher "$1")
 
   if [[ -z "$plugin" ]]; then
-    plugin=$(_extract_plugin_from_github_url "$1")
+    plugin=$(vg:github_uri_matcher "$1")
   fi
 
   printf "$plugin"
@@ -269,75 +336,150 @@ _extract_plugin_name_from_arg() {
 # parse - parse the plugin name from the repo url
 #         and set global variables
 # usage: parse <url>
-parse() {
-  local url="${1}"
-  local name=$( _extract_plugin_name_from_arg "$url" )
+vg:parse_uri() {
+  local input="${1}"
+  name=$( vg:extract_plugin_name "$input" )
 
-  [[ -z "$name" ]] && err _CODE_USR "Unable to recognize the format of '$url'. \nExpecting something that ends in /<plugin>.git\nWhere <plugin> is [A-Za-z0-9_.-]+"
+  if [[ -z "$name" ]]; then
+    vg:die ${code_usr} "Unable to recognize the format of '${input}'." \
+      "Expecting something that ends in <plugin>.git"  \
+      "Where <plugin> is [A-Za-z0-9_.-]+"
+  fi
 
-  _URL="${url}"
-  _PLUGIN="${name}"
-  _PLUGIN_PATH="${_VIM_PLUGINS_PATH}/${_PLUGIN}"
+  uri="${input}"
+  target_path="${vim_plugins_dir}/${name}"
+
+  vg:config "plugin-uri" "${uri}"
+  vg:config "plugin-name" "${name}"
+  vg:config "target-dir" "${target_path}" "VIM_PLUGINS_DIR" "${vim_plugins_dir}"
 }
 
-debug() {
-  local message="${@:-}"
-  c=$(caller 0)
-  msg "$(color yellow)DEBUG:$(color reset) $c $message\n"
+# split -xyz into -x -y -z
+#   saves results to args()
+vg:split_shortargs() {
+  local arg
+  while [[ $# -ne 0 ]]; do
+    arg="$1"
+    if [[ "$arg" =~ ^-[a-zA-Z]+$ ]]; then
+      while read -rn 1; do
+        [[ ${#REPLY} -gt 0 ]] && args+=("-${REPLY}") || :
+       done  <<< "${arg#-}"
+    else
+      args+=( "${arg}" )
+    fi
+    shift
+  done
 }
 
-handle_args() {
-  [[ $# -eq 0 ]] && usage $_CODE_USR
+vg:handle_args() {
+  [[ $# -eq 0 ]] && usage ${code_usr} || :
 
   local arg
 
   while [[ $# -ne 0 ]]; do
     arg="$1"
     case "${arg}" in
-      -nq|-qn)
-        _QUIET="true"
-        _COLOR="off"
+      ''|-h*|--h*|help)
+        usage
         ;;
-      -q)
-        _QUIET="true"
+      -d|--dry-run)
+        dryrun_mode="on"
         ;;
-      -n)
-        _COLOR="off"
+      -n|--no-color)
+        color_mode="off"
         ;;
-      *.git|*github*)
-        parse "${arg}"
+      -q|--quiet)
+        quiet_mode="true"
+        ;;
+      -V|--verbose)
+        verbose_mode="true"
         ;;
       *)
-        printf "$(color red)ERROR:$(color reset) invalid argument\n"
-        usage $_CODE_USR
+        if [[ -z "${source}" ]]; then
+          source="${arg}"
+        else
+          vg:err "invalid argument(s)"
+          usage ${code_usr}
+        fi
         ;;
     esac
     shift
   done
+
+  if [[ ${NO_COLOR} ]]; then
+    color_mode="off"
+  fi
 }
 
-hello() {
-  msg -c cyan "${_ME} > hello"
+#
+# }}} / parsing input
+
+# job management {{{
+#
+
+vg:run() {
+  if [[ $dryrun_mode ]]; then
+    vg:printfx -c grey "> ${*}"
+    return
+  fi
+
+  "${@}" || vg:die $code_fail "Command failed: ${*}"
 }
 
-success() {
-  msg "$(color green)[SUCCESS]$(color reset) Plugin installed at ${_PLUGIN_PATH}"
+vg:fetch_plugin() {
+  local flag=""
+  [[ -n "${quiet_mode}" ]] && flag=" --quiet"
+
+  vg:run cd "${vim_plugins_dir}"
+
+  vg:color grey
+  vg:run git clone ${flag} --depth 1 "${uri}"
+  vg:color reset
 }
 
-goodbye() {
-  msg -c cyan "${_ME} > goodbye"
+vg:helptags() {
+  if [[ $dryrun_mode ]]; then
+    return
+  fi
+
+  find ${target_path} -type d -name doc -print0 | while IFS= read -r -d $'\0' docpath ; do
+    vg:printfx -c magenta "generating helptags" -c grey "> vim -e -c \":helptags ${docpath}\" -c ':q'"
+    vg:color grey
+    vim -e -c ":helptags ${docpath}" -c ':q'
+    vg:color reset
+  done
 }
+
+#
+# }}} / job management
 
 main() {
-  handle_args "${@:-}"
+  local color_mode=on dryrun_mode quiet_mode verbose_mode  # modes
+  local user_vimdir vim_plugins_dir home_dir               # found or assigned paths
+  local source args=()                                     # input
+  local uri name target_path                               # final plugin details
 
-  hello
-  verify_env
-  fetch_plugin
-  helptags
-  success
+  local version='0.2'
+
+  # exit codes
+  local code_suc=0      # success
+  local code_err=1      # error
+  local code_env=102    # missing requirement
+  local code_usr=103    # invalid input
+  local code_fail=104   # external command failure
+
+  vg:split_shortargs "${__args[@]}"
+  vg:handle_args "${args[@]}"
+  vg:check_env
+
+  vg:parse_uri "${source}"
+
+  vg:find_duplicates
+  vg:fetch_plugin
+  vg:helptags
+  vg:success
+
+  return ${code_suc}
 }
 
-main "${@:-}"
-
-exit $_CODE_SUC
+main
