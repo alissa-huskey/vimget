@@ -130,8 +130,16 @@ vg:require_git() {
 }
 
 vg:find_duplicates() {
-  if [[ -e "${target_path}" ]]; then
-    vg:die $code_env "Plugin already installed at:" "${target_path}"
+  local -a dups
+
+  IFS=$'\n' read -d '' -ra dups < <( {                                                  \
+    find -L "${user_vimdir}/bundle" -maxdepth 1 -mindepth 1 -iname "${name}"  ; \
+    find -L "${user_vimdir}/pack" -maxdepth 3 -mindepth 3 -ipath "*/*/${name}"        ; \
+    find -L "${vim_plugins_dir}" -maxdepth 1 -mindepth 1 -iname "${name}"     ; \
+  } 2>/dev/null | sort -u ) || :
+
+  if [[ ${#dups[@]} -gt 0 ]]; then
+    vg:die ${code_env} "Plugin already installed at:" "${dups[@]}"
   fi
 
   return 0
@@ -151,7 +159,7 @@ vg:find_plugins_dir() {
   local -a dirs=(                            \
       "${VIM_PLUGINS_DIR:-#}"                \
       "${user_vimdir:-#}/bundle"             \
-      "${user_vimdir:-#}/pack/start/bundle"  \
+      "${user_vimdir:-#}/pack/bundle/start"  \
   )
 
   for dir in "${dirs[@]}"; do
@@ -298,12 +306,12 @@ vg:printfx() {
 vg:config() {
   [[ ! ${verbose_mode} ]] && return || :
 
-  local name="${1}" val="${2}" width1=12 width2=50 str
+  local var="${1}" val="${2}" width1=12 width2=50 str
 
   read -r str < <( vg:pretty_paths "${val}" ) || :
 
   vg:printfx -c bright-blue -n "|"
-  printf " %-*s " ${width1} "${name}"
+  printf " %-*s " ${width1} "${var}"
   vg:printfx -c bright-blue -n "|"
   printf " %-*s " ${width2} "${str}"
   vg:printfx -c bright-blue "|"
@@ -376,7 +384,7 @@ vg:github_shorthand_uri_matcher() {
 #         and set global variables
 # usage: parse <url>
 vg:parse_uri() {
-  local input="${1}" name
+  local input="${1}"
 
   for fun in dot_git github git_scheme github_shorthand; do
     read -r name < <("vg:${fun}_uri_matcher" "${input}") || :

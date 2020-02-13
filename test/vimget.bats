@@ -46,7 +46,7 @@ teardown() {
 
   while read -r dir; do
     rm_fixture_dir "${dir}"
-  done < <( find "$VIM_PLUGINS_DIR" -maxdepth 1 -mindepth 1 2> /dev/null )
+  done < <( find "$VIM_PLUGINS_DIR" "$VIMDIR/pack" -maxdepth 1 -mindepth 1 2> /dev/null )
 }
 
 # matchers {{{
@@ -58,7 +58,7 @@ teardown() {
   assert_success
   assert_line --index 0 '> cd $VIM_PLUGINS_DIR'
   assert_line --index 1 "> git clone --depth 1 ssh://sourceware.org/git/systemtap.git"
-  assert_equal 2 "${#lines[@]}"
+  assert_equal "${#lines[@]}" 2
 }
 
 @test "vimget */<name>.git/" {
@@ -67,7 +67,7 @@ teardown() {
   assert_success
   assert_line --index 0 '> cd $VIM_PLUGINS_DIR'
   assert_line --index 1 "> git clone --depth 1 ssh://sourceware.org/git/systemtap.git/"
-  assert_equal 2 "${#lines[@]}"
+  assert_equal "${#lines[@]}" 2
 }
 
 @test "vimget *github.com/*/<name>" {
@@ -76,7 +76,7 @@ teardown() {
   assert_success
   assert_line --index 0 '> cd $VIM_PLUGINS_DIR'
   assert_line --index 1 "> git clone --depth 1 http://github.com/pseewald/vim-anyfold"
-  assert_equal 2 "${#lines[@]}"
+  assert_equal "${#lines[@]}" 2
 }
 
 @test "vimget *github.com/*/<name>/" {
@@ -85,7 +85,7 @@ teardown() {
   assert_success
   assert_line --index 0 '> cd $VIM_PLUGINS_DIR'
   assert_line --index 1 "> git clone --depth 1 http://github.com/pseewald/vim-anyfold/"
-  assert_equal 2 "${#lines[@]}"
+  assert_equal "${#lines[@]}" 2
 }
 
 @test "vimget git://*/<name>" {
@@ -94,7 +94,7 @@ teardown() {
   assert_success
   assert_line --index 0 '> cd $VIM_PLUGINS_DIR'
   assert_line --index 1 "> git clone --depth 1 git://sourceware.org/git/systemtap"
-  assert_equal 2 "${#lines[@]}"
+  assert_equal "${#lines[@]}" 2
 }
 
 @test "vimget git://*/<name>/" {
@@ -103,7 +103,7 @@ teardown() {
   assert_success
   assert_line --index 0 '> cd $VIM_PLUGINS_DIR'
   assert_line --index 1 "> git clone --depth 1 git://sourceware.org/git/systemtap/"
-  assert_equal 2 "${#lines[@]}"
+  assert_equal "${#lines[@]}" 2
 }
 
 @test "vimget <owner>/<name>" {
@@ -112,7 +112,7 @@ teardown() {
   assert_success
   assert_line --index 0 '> cd $VIM_PLUGINS_DIR'
   assert_line --index 1 "> git clone --depth 1 https://github.com/vim/killersheep"
-  assert_equal 2 "${#lines[@]}"
+  assert_equal "${#lines[@]}" 2
 }
 
 #
@@ -152,7 +152,7 @@ teardown() {
   assert_failure ${code_env}
   assert_line --index 0 "Error: Plugin already installed at:"
   assert_line --index 1 '     > $VIM_PLUGINS_DIR/vim-gitgutter'
-  assert_equal 2 "${#lines[@]}"
+  assert_equal "${#lines[@]}" 2
 }
 
 
@@ -169,7 +169,7 @@ teardown() {
   assert_failure ${code_env}
   assert_line --index 0 "Error: Unable to access provided VIMDIR:"
   assert_line --index 1 "     > ./test/.vim"
-  assert_equal 2 "${#lines[@]}"
+  assert_equal "${#lines[@]}" 2
 }
 
 @test "when VIM_PLUGINS_DIR does not exist" {
@@ -179,7 +179,7 @@ teardown() {
   assert_failure ${code_env}
   assert_line --index 0 "Error: Unable to access provided VIM_PLUGINS_DIR:"
   assert_line --index 1 '     > $VIMDIR/bundle'
-  assert_equal 2 "${#lines[@]}"
+  assert_equal "${#lines[@]}" 2
 }
 
 @test "when VIMDIR is not set a likely existing vimdir is found" {
@@ -199,7 +199,7 @@ teardown() {
 
   assert_line --index 0 "Error: Unable to find vimdir."
   assert_line --index 1 "     > Please set the environment variable VIMDIR to continue."
-  assert_equal 2 "${#lines[@]}"
+  assert_equal "${#lines[@]}" 2
 }
 
 @test "when VIM_PLUGINS_DIR is not set a likely existing vim_plugins_dir is found" {
@@ -219,7 +219,7 @@ teardown() {
 
   assert_line --index 0 "Error: Unable to find plugins dir."
   assert_line --index 1 "     > Please set the environment variable VIM_PLUGINS_DIR to continue."
-  assert_equal 2 "${#lines[@]}"
+  assert_equal "${#lines[@]}" 2
 }
 
 @test "when plugin already installed" {
@@ -229,7 +229,39 @@ teardown() {
   assert_failure ${code_env}
   assert_line --index 0 "Error: Plugin already installed at:"
   assert_line --index 1 '     > $VIM_PLUGINS_DIR/fzf.vim'
-  assert_equal 2 "${#lines[@]}"
+  assert_equal "${#lines[@]}" 2
+}
+
+@test "when plugin already installed in a different dir" {
+  mkdir -p "${VIMDIR}/pack/others/start/fzf.vim"
+  run ${rootdir}/vimget --dry-run https://github.com/junegunn/fzf.vim
+
+  assert_failure ${code_env}
+  assert_line --index 0 "Error: Plugin already installed at:"
+  assert_line --index 1 '     > $VIMDIR/pack/others/start/fzf.vim'
+  assert_equal "${#lines[@]}" 2
+}
+
+@test "when plugin already installed with a different case" {
+  mkdir "${VIM_PLUGINS_DIR}/FZF.vim"
+  run ${rootdir}/vimget --dry-run https://github.com/junegunn/fzf.vim
+
+  assert_failure ${code_env}
+  assert_line --index 0 "Error: Plugin already installed at:"
+  assert_line --index 1 '     > $VIM_PLUGINS_DIR/FZF.vim'
+  assert_equal "${#lines[@]}" 2
+}
+
+@test "when multiple matching plugins are already installed" {
+  mkdir "${VIM_PLUGINS_DIR}/FZF.vim"
+  mkdir -p "${VIMDIR}/pack/others/start/fzf.vim"
+  run ${rootdir}/vimget --dry-run https://github.com/junegunn/fzf.vim
+
+  assert_failure ${code_env}
+  assert_line --index 0 "Error: Plugin already installed at:"
+  assert_line --index 1 '     > $VIM_PLUGINS_DIR/FZF.vim'
+  assert_line --index 2 '     > $VIMDIR/pack/others/start/fzf.vim'
+  assert_equal "${#lines[@]}" 3
 }
 
 #
