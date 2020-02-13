@@ -45,10 +45,10 @@ usage() {
   [[ -z "$code" ]] && code=${code_suc} || :
 
 cat <<HELPTEXT
-usage: ${__me} [-q|-V] [-n] [-d] <repo url>
+usage: ${__me} [-q|-V] [-n] [-d] <repo-uri> [[-n] <name>]
 options:
   -d | --dry-run
-  -n | --no-color
+  -c | --no-color
   -q | --quiet
   -V | --verbose
 
@@ -131,11 +131,12 @@ vg:require_git() {
 
 vg:find_duplicates() {
   local -a dups
+  local name="$1"
 
-  IFS=$'\n' read -d '' -ra dups < <( {                                                  \
-    find -L "${user_vimdir}/bundle" -maxdepth 1 -mindepth 1 -iname "${name}"  ; \
-    find -L "${user_vimdir}/pack" -maxdepth 3 -mindepth 3 -ipath "*/*/${name}"        ; \
-    find -L "${vim_plugins_dir}" -maxdepth 1 -mindepth 1 -iname "${name}"     ; \
+  IFS=$'\n' read -d '' -ra dups < <( {                                            \
+    find -L "${user_vimdir}/bundle" -maxdepth 1 -mindepth 1 -iname "${name}"    ; \
+    find -L "${user_vimdir}/pack" -maxdepth 3 -mindepth 3 -ipath "*/*/${name}"  ; \
+    find -L "${vim_plugins_dir}" -maxdepth 1 -mindepth 1 -iname "${name}"       ; \
   } 2>/dev/null | sort -u ) || :
 
   if [[ ${#dups[@]} -gt 0 ]]; then
@@ -354,11 +355,42 @@ vg:pretty_paths() {
   printf "%s" "${str}"
 }
 
+vg:print_errfile() {
+  if [[ ! -s "$errfile" ]]; then
+    return
+  fi
+
+  local spacer_color="$1" text_color="$2" force=$3
+
+  if [[ ${quiet_mode} ]] && [[ ! ${force} ]]; then
+    return
+  fi
+
+  # append a line in case the last line didn't
+  echo >> "${errfile}"
+
+  while read -r line; do
+    # skip blank lines
+    if [[ -z "${line// /}" ]]; then
+      continue
+    fi
+
+    vg:printfx -c "${spacer_color}" -n "| " -c "${text_color}" "$line"
+  done < "${errfile}"
+
+  # clear the file
+  echo > "${errfile}"
+}
+
 #
 # }}} / printing output
 
 # parsing input {{{
 #
+
+vg:name_matcher() {
+  sed -nE 's/^([a-zA-Z0-9][a-zA-Z0-9\-\.]+[a-zA-Z0-9])$/\1/p' <<< "$1"
+}
 
 #  */<name>.git
 vg:dot_git_uri_matcher() {
@@ -387,26 +419,27 @@ vg:parse_uri() {
   local input="${1}"
 
   for fun in dot_git github git_scheme github_shorthand; do
-    read -r name < <("vg:${fun}_uri_matcher" "${input}") || :
-    if [[ -n "${name}" ]]; then
+    read -r repo_name < <("vg:${fun}_uri_matcher" "${input}") || :
+    if [[ -n "${repo_name}" ]]; then
       break
     fi
   done
 
-  if [[ -z "$name" ]]; then
+  if [[ -z "$repo_name" ]]; then
     vg:die ${code_usr} "Unable to recognize URI: '${input}'." \
       "Expecting something that looks like *.git, *github.com* or git://*"
   fi
 
-  uri="${input}"
-  target_path="${vim_plugins_dir}/${name}"
+  repo_uri="${input}"
+  target_path="${vim_plugins_dir}/${repo_name}"
 
   if [[ "$fun" == "github_shorthand" ]]; then
-    uri="https://github.com/${uri}"
+    repo_uri="https://github.com/${repo_uri}"
   fi
 
-  vg:config "plugin-uri" "${uri}"
-  vg:config "plugin-name" "${name}"
+  vg:config "repo-name" "${repo_name}"
+  vg:config "repo-uri" "${repo_uri}"
+  vg:config "plugin-name" "${plugin_name}"
   vg:config "target-dir" "${target_path}"
 }
 
@@ -441,7 +474,7 @@ vg:handle_args() {
       -d|--dry-run)
         dryrun_mode="on"
         ;;
-      -n|--no-color)
+      -c|--no-color)
         color_mode="off"
         ;;
       -q|--quiet)
@@ -450,16 +483,19 @@ vg:handle_args() {
       -V|--verbose)
         verbose_mode="true"
         ;;
+      -n)
+        list+=( "${2}" )
+        shift
+        ;;
+      -*)
+        vg:err "invalid argument(s)"
+        usage ${code_usr}
+        ;;
       *)
-        if [[ -z "${source}" ]]; then
-          source="${arg}"
-        else
-          vg:err "invalid argument(s)"
-          usage ${code_usr}
-        fi
+        list+=( "${arg}" )
         ;;
     esac
-    shift
+    [[ $# -gt 0 ]] && shift || :
   done
 
   if [[ ${NO_COLOR} ]]; then
@@ -469,6 +505,12 @@ vg:handle_args() {
   if [[ ${verbose_mode} ]]; then
     quiet_mode=
   fi
+
+  case ${#list[@]} in
+    0)
+      vg:die ${code_usr} "missing required argument: <repo-uri>"
+      ;;
+  esac
 }
 
 #
@@ -495,46 +537,23 @@ vg:run() {
   fi
 }
 
-vg:print_errfile() {
-  if [[ ! -s "$errfile" ]]; then
-    return
-  fi
-
-  local spacer_color="$1" text_color="$2" force=$3
-
-  if [[ ${quiet_mode} ]] && [[ ! ${force} ]]; then
-    return
-  fi
-
-  # append a line in case the last line didn't
-  echo >> "${errfile}"
-
-  while read -r line; do
-    # skip blank lines
-    if [[ -z "${line// /}" ]]; then
-      continue
-    fi
-
-    vg:printfx -c "${spacer_color}" -n "| " -c "${text_color}" "$line"
-  done < "${errfile}"
-
-  # clear the file
-  echo > "${errfile}"
-}
-
 vg:fetch_plugin() {
-  local noise_flag=""
+  local noise_flag="" repo_uri="$1" name="$2"
   [[ -n "${quiet_mode}" ]] && noise_flag="--quiet" || :
   [[ -n "${verbose_mode}" ]] && noise_flag="--verbose" || :
 
+  # intentionally left name unquoted here so that if it's blank
+  # git does not read it as an invalid repo name
   vg:run cd "${vim_plugins_dir}" && \
-    vg:run git clone ${noise_flag} --depth 1 "${uri}"
+    vg:run git clone ${noise_flag} --depth 1 "${repo_uri}" ${name}
 }
 
 vg:helptags() {
   if [[ $dryrun_mode ]]; then
     return
   fi
+
+  local target_path="$1"
 
   while IFS= read -r -d $'\0' docpath ; do
 
@@ -551,14 +570,42 @@ vg:helptags() {
   done < <( find ${target_path} -type d -name doc -print0 )
 }
 
+vg:validate_name() {
+  local plugin_name="$1" matched
+  if [[ -z "${plugin_name}" ]]; then
+    return
+  fi
+
+  read -r matched < <( vg:name_matcher "${plugin_name}" ) || :
+  if [[ -z "${matched}" ]]; then
+    vg:die $code_usr "Invalid argument for <name>: ${plugin_name}"
+  fi
+}
+
+vg:get() {
+  local repo_uri="$1"
+  local repo_name target_path  # final plugin details
+  plugin_name="$2"
+
+  vg:parse_uri "${repo_uri}"
+  vg:validate_name "${plugin_name}"
+
+  # intentionally left unquoted so that if $plugin_name
+  # is empty, $repo_name will go to $1
+  vg:find_duplicates ${plugin_name} ${repo_name}
+
+  vg:fetch_plugin "${repo_uri}" "${plugin_name}"
+  vg:helptags "${target_path}"
+  vg:success
+}
+
 #
 # }}} / job management
 
 main() {
   local color_mode=on dryrun_mode quiet_mode verbose_mode  # modes
   local user_vimdir vim_plugins_dir home_dir               # found or assigned paths
-  local source args=()                                     # input
-  local uri name target_path                               # final plugin details
+  local -a args list                                       # input
 
   local version='0.2'
   local user_pwd="${PWD}"
@@ -574,12 +621,7 @@ main() {
   vg:handle_args "${args[@]}"
   vg:check_env
 
-  vg:parse_uri "${source}"
-
-  vg:find_duplicates
-  vg:fetch_plugin
-  vg:helptags
-  vg:success
+  vg:get "${list[@]}"
 
   return ${code_suc}
 }

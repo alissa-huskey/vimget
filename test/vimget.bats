@@ -118,7 +118,7 @@ teardown() {
 #
 # }}} / matchers
 
-# flags {{{
+# args {{{
 #
 
 @test "vimget -Vd is translated to -V -d" {
@@ -155,9 +155,48 @@ teardown() {
   assert_equal "${#lines[@]}" 2
 }
 
+@test "vimget <repo> <name>" {
+  run ${rootdir}/vimget --dry-run https://github.com/airblade/vim-gitgutter gitgutter2
+
+  assert_success
+  assert_line --index 1 "> git clone --depth 1 https://github.com/airblade/vim-gitgutter gitgutter2"
+}
+
+@test "vimget <repo> <invalid-name>" {
+  run ${rootdir}/vimget --dry-run https://github.com/airblade/vim-gitgutter vim@gitgutter
+
+  assert_failure $code_usr
+  assert_output "Error: Invalid argument for <name>: vim@gitgutter"
+}
+
+@test "vimget <repo> -n <name>" {
+  run ${rootdir}/vimget --dry-run https://github.com/airblade/vim-gitgutter -n gitgutter2
+
+  assert_success
+  assert_line --index 1 "> git clone --depth 1 https://github.com/airblade/vim-gitgutter gitgutter2"
+}
+
+@test "vimget <repo> -n <invalid-name>" {
+  run ${rootdir}/vimget --dry-run https://github.com/airblade/vim-gitgutter -n vim@gitgutter
+
+  assert_failure $code_usr
+  assert_output "Error: Invalid argument for <name>: vim@gitgutter"
+}
+
+@test "vimget <repo> <repo>" {
+  skip
+}
+
+@test "vimget <repo> -n <name> <repo> -n <name>" {
+  skip
+}
+
+@test "echo <repo> -n <name> <repo> -n <name> | vimget" {
+  skip
+}
 
 #
-# }}} / flags
+# }}} / args
 
 # conditions {{{
 #

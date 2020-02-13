@@ -21,7 +21,7 @@ Usage
 usage: vimget [-q|-n|-d-q] <repo-uri>
 
 options:
-  -n | --no-color
+  -c | --no-color
   -d | --dry-run
   -q | --quiet
   -V | --verbose
@@ -38,7 +38,7 @@ Environment
 
 * `VIM_PLUGINS_DIR`
     * The subdirectory under `\$VIMDIR` where your plugins are located. `vimget`
-         will look for `\$VIMDIR/bundles` and `\$VIMDIR/pack/start/bundles`. If you
+         will look for `\$VIMDIR/bundle` and `\$VIMDIR/pack/bundle/start`. If you
          install your plugins elsewhere, use this to specify it.
 
 * `NO_COLOR`
