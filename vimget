@@ -81,7 +81,7 @@ vg:err() {
   for line in "${@}"; do
     [[ $i -gt 0 ]] && header="     >" || :
 
-    printf "$(vg:color red)%s$(vg:color reset) %s\n" "${header}" "${line}" >&2
+    vg:printfx -c red -n "${header}" -c reset " ${line}" >&2
     : $(( i++ ))
   done
 }
@@ -279,9 +279,11 @@ vg:config() {
   local name="${1}" val="${2}" pathname='$'"${3}" path="${4}"
   local width1=12 width2=50 sep
 
-  sep="$(vg:printfx -c bright-blue -n "|")"
-
-  printf "${sep} %-*s ${sep} %-*s ${sep}\n" ${width1} "${name}" ${width2} "${val/$path/$pathname}"
+  vg:printfx -c bright-blue -n "|"
+  printf " %-*s " ${width1} "${name}"
+  vg:printfx -c bright-blue -n "|"
+  printf " %-*s " ${width2} "${val/$path/$pathname}"
+  vg:printfx -c bright-blue "|"
 }
 
 vg:success() {
@@ -289,7 +291,7 @@ vg:success() {
     return
   fi
 
-  vg:printfx "$(vg:color green)[SUCCESS]$(vg:color reset) Plugin installed at ${target_path}"
+  vg:printfx -c green "[SUCCESS]" -c reset " Plugin installed at ${target_path}"
 }
 
 vg:debug() {
@@ -302,48 +304,37 @@ vg:debug() {
 # parsing input {{{
 #
 
-# valid inputs to git clone:
-# (see git help clone)
-#  - ssh://[user@]host.xz[:port]/path/to/repo.git/
-#  - git://host.xz[:port]/path/to/repo.git/
-#  - http[s]://host.xz[:port]/path/to/repo.git/
-#  - ftp[s]://host.xz[:port]/path/to/repo.git/
-#  - [user@]host.xz:path/to/repo.git/
-#  - ssh://[user@]host.xz[:port]/~[user]/path/to/repo.git/
-#  - git://host.xz[:port]/~[user]/path/to/repo.git/
-#  - [user@]host.xz:/~[user]/path/to/repo.git/
-#  - /path/to/repo.git/
-#  - file:///path/to/repo.git/
+#  */<name>.git
 vg:dot_git_uri_matcher() {
-  printf "$1" | sed -nE 's/^.*\/([A-Za-z0-9_.-]+).git$/\1/p'
+  sed -nE 's/^.*\/([^/]+).git[/]?$/\1/p' <<< "$1"
 }
 
+# *github.com/*/<name>
 vg:github_uri_matcher() {
-  printf "$1" | sed -nE 's/^http[s]?:\/\/github\.com\/[A-Za-z0-9_.-]\/?.*\/([A-Za-z0-9_.-]+)$/\1/p'
+  sed -nE 's/^.*github\.com\/[^/]+\/([^/]+)[/]?$/\1/p' <<< "$1"
 }
 
-vg:extract_plugin_name() {
-  local plugin
-  plugin=$(vg:dot_git_uri_matcher "$1")
-
-  if [[ -z "$plugin" ]]; then
-    plugin=$(vg:github_uri_matcher "$1")
-  fi
-
-  printf "$plugin"
+# git://.*/(<name>)
+vg:git_scheme_uri_matcher() {
+  sed -nE 's/^git:\/\/.+\/([^/]+)[/]?$/\1/p'<<< "${1#/}"
 }
 
-# parse - parse the plugin name from the repo url
+# parse - parse the plugin name from the repo uri
 #         and set global variables
 # usage: parse <url>
 vg:parse_uri() {
-  local input="${1}"
-  name=$( vg:extract_plugin_name "$input" )
+  local input="${1}" name
+
+  for fun in dot_git github git_scheme; do
+    read -r name < <("vg:${fun}_uri_matcher" "${input}") || :
+    if [[ -n "${name}" ]]; then
+      break
+    fi
+  done
 
   if [[ -z "$name" ]]; then
-    vg:die ${code_usr} "Unable to recognize the format of '${input}'." \
-      "Expecting something that ends in <plugin>.git"  \
-      "Where <plugin> is [A-Za-z0-9_.-]+"
+    vg:die ${code_usr} "Unable to recognize URI: '${input}'." \
+      "Expecting something that looks like *.git, *github.com* or git://*"
   fi
 
   uri="${input}"
@@ -442,12 +433,9 @@ vg:helptags() {
     return
   fi
 
-  find ${target_path} -type d -name doc -print0 | while IFS= read -r -d $'\0' docpath ; do
-    vg:printfx -c magenta "generating helptags" -c grey "> vim -e -c \":helptags ${docpath}\" -c ':q'"
-    vg:color grey
-    vim -e -c ":helptags ${docpath}" -c ':q'
-    vg:color reset
-  done
+  while IFS= read -r -d $'\0' docpath ; do
+    vg:run vim -e -c ":helptags ${docpath}" -c ':q'
+  done < <( find ${target_path} -type d -name doc -print0 )
 }
 
 #

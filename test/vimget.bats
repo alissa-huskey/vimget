@@ -39,7 +39,25 @@ setup() {
   fi
 }
 
-@test "vimget github.com/*" {
+@test "vimget */<name>.git" {
+  run ${rootdir}/vimget --dry-run ssh://sourceware.org/git/systemtap.git
+
+  assert_success
+  assert_line --index 0 "> cd ${VIM_PLUGINS_DIR}"
+  assert_line --index 1 "> git clone --depth 1 ssh://sourceware.org/git/systemtap.git"
+  assert_equal 2 "${#lines[@]}"
+}
+
+@test "vimget */<name>.git/" {
+  run ${rootdir}/vimget --dry-run ssh://sourceware.org/git/systemtap.git/
+
+  assert_success
+  assert_line --index 0 "> cd ${VIM_PLUGINS_DIR}"
+  assert_line --index 1 "> git clone --depth 1 ssh://sourceware.org/git/systemtap.git/"
+  assert_equal 2 "${#lines[@]}"
+}
+
+@test "vimget *github.com/*/<name>" {
   run ${rootdir}/vimget --dry-run http://github.com/pseewald/vim-anyfold
 
   assert_success
@@ -48,12 +66,30 @@ setup() {
   assert_equal 2 "${#lines[@]}"
 }
 
-@test "vimget *.git" {
-  run ${rootdir}/vimget --dry-run git://sourceware.org/git/systemtap.git
+@test "vimget *github.com/*/<name>/" {
+  run ${rootdir}/vimget --dry-run http://github.com/pseewald/vim-anyfold/
 
   assert_success
   assert_line --index 0 "> cd ${VIM_PLUGINS_DIR}"
-  assert_line --index 1 "> git clone --depth 1 git://sourceware.org/git/systemtap.git"
+  assert_line --index 1 "> git clone --depth 1 http://github.com/pseewald/vim-anyfold/"
+  assert_equal 2 "${#lines[@]}"
+}
+
+@test "vimget git://*/<name>" {
+  run ${rootdir}/vimget --dry-run git://sourceware.org/git/systemtap
+
+  assert_success
+  assert_line --index 0 "> cd ${VIM_PLUGINS_DIR}"
+  assert_line --index 1 "> git clone --depth 1 git://sourceware.org/git/systemtap"
+  assert_equal 2 "${#lines[@]}"
+}
+
+@test "vimget git://*/<name>/" {
+  run ${rootdir}/vimget --dry-run git://sourceware.org/git/systemtap/
+
+  assert_success
+  assert_line --index 0 "> cd ${VIM_PLUGINS_DIR}"
+  assert_line --index 1 "> git clone --depth 1 git://sourceware.org/git/systemtap/"
   assert_equal 2 "${#lines[@]}"
 }
 

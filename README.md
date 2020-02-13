@@ -53,13 +53,13 @@ Examples
  $ vimget https://github.com/vim-utils/vim-man.git
 
  # non-github URIS will work too
- $ vimget git://sourceware.org/git/systemtap.git
+ $ vimget git://sourceware.org/git/systemtap
 
- # in theory, any URI that git can clone will work
- # vimget currently checks for *github.com* or *.git
+ # anything that looks like *.git, *github.com* or
+ # git://* will work
  $ vimget /path/to/repo.git
- $ vimget ssh://[user@]host.xz[:port]/path/to/repo.git
- $ vimget git://host.xz[:port]/~[user]/path/to/repo.git
+ $ vimget ssh://github.com/path/to/repo
+ $ vimget git://host.xz[:port]/~[user]/path/to/repo
 ```
 
 
