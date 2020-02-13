@@ -93,6 +93,15 @@ setup() {
   assert_equal 2 "${#lines[@]}"
 }
 
+@test "vimget <owner>/<name>" {
+  run ${rootdir}/vimget --dry-run vim/killersheep
+
+  assert_success
+  assert_line --index 0 "> cd ${VIM_PLUGINS_DIR}"
+  assert_line --index 1 "> git clone --depth 1 https://github.com/vim/killersheep"
+  assert_equal 2 "${#lines[@]}"
+}
+
 @test "vimget -Vd is translated to -V -d" {
   run ${rootdir}/vimget -Vd git://sourceware.org/git/systemtap.git
 

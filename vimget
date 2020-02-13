@@ -319,13 +319,18 @@ vg:git_scheme_uri_matcher() {
   sed -nE 's/^git:\/\/.+\/([^/]+)[/]?$/\1/p'<<< "${1#/}"
 }
 
+# <owner>/<name>
+vg:github_shorthand_uri_matcher() {
+  sed -nE 's/^[^/]+\/([^/]+)$/\1/p'<<< "${1#/}"
+}
+
 # parse - parse the plugin name from the repo uri
 #         and set global variables
 # usage: parse <url>
 vg:parse_uri() {
   local input="${1}" name
 
-  for fun in dot_git github git_scheme; do
+  for fun in dot_git github git_scheme github_shorthand; do
     read -r name < <("vg:${fun}_uri_matcher" "${input}") || :
     if [[ -n "${name}" ]]; then
       break
@@ -339,6 +344,10 @@ vg:parse_uri() {
 
   uri="${input}"
   target_path="${vim_plugins_dir}/${name}"
+
+  if [[ "$fun" == "github_shorthand" ]]; then
+    uri="https://github.com/${uri}"
+  fi
 
   vg:config "plugin-uri" "${uri}"
   vg:config "plugin-name" "${name}"
