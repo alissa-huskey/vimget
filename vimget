@@ -8,6 +8,8 @@
 set -Eeo pipefail # fail on errors, even within pipes
 shopt -s xpg_echo  # expand backslash escapes in echo automatically (ie \n)
 
+read -r errfile < <(mktemp)
+
 # }}} /bash options
 
 # signal trapping {{{
@@ -23,6 +25,7 @@ vg:handle_err() {
 }
 
 trap vg:handle_err ERR
+trap 'rm $errfile' EXIT
 
 #
 # }}} / signal trapping
@@ -42,10 +45,10 @@ usage() {
   [[ -z "$code" ]] && code=${code_suc} || :
 
 cat <<HELPTEXT
-usage: ${__me} [-q|-n|-d-q] <repo url>
+usage: ${__me} [-q|-V] [-n] [-d] <repo url>
 options:
-  -n | --no-color
   -d | --dry-run
+  -n | --no-color
   -q | --quiet
   -V | --verbose
 
@@ -81,7 +84,7 @@ vg:err() {
   for line in "${@}"; do
     [[ $i -gt 0 ]] && header="     >" || :
 
-    vg:printfx -c red -n "${header}" -c reset " ${line}" >&2
+    vg:printfx -c red -n "${header}" -r -p " ${line}" >&2
     : $(( i++ ))
   done
 }
@@ -92,6 +95,8 @@ vg:die() {
   if [[ $# -gt 0 ]]; then
     vg:err "${@}"
   fi
+
+  vg:print_errfile red grey 1
 
   exit $code
 }
@@ -134,6 +139,7 @@ vg:find_duplicates() {
 
 vg:check_env() {
   home_dir="$(cd -P $HOME && printf "%s" "$PWD")"
+
   vg:require_git
   vg:require_vim
   vg:find_vimdir
@@ -167,7 +173,7 @@ vg:find_plugins_dir() {
       "Please set the environment variable VIM_PLUGINS_DIR to continue."
   fi
 
-  vg:config "plugins-dir" "${vim_plugins_dir}" "VIMDIR" "${user_vimdir}"
+  vg:config "plugins-dir" "${vim_plugins_dir}"
 }
 
 vg:find_vimdir() {
@@ -200,7 +206,7 @@ vg:find_vimdir() {
       "Please set the environment variable VIMDIR to continue."
   fi
 
-  vg:config "vimdir" "${user_vimdir}" "HOME" "${HOME:-#}"
+  vg:config "vimdir" "${user_vimdir}"
 }
 
 #
@@ -235,6 +241,14 @@ vg:color() {
   printf "\033[${code}m"
 }
 
+vg:msg() {
+  if [[ ${quiet_mode} ]]; then
+    return
+  fi
+
+  vg:printfx "$@"
+}
+
 # colorize and format output
 # -c <color>  -- print the following string(s) in color
 # -n <string> -- don't print a newline after <string>
@@ -243,59 +257,93 @@ vg:color() {
 # printfx <string> <string> -c color <string> <string>
 # printfx -c <color> -n <string> -c <color> <string>
 vg:printfx() {
-  [[ -n "${quiet_mode}" ]] && return 0
-  local color_code="" toggle
+  local colored
 
   while [[ $# -ne 0 ]]; do
     case $1 in
       -c)
-        if [[ ! ${toggle} ]]; then
-          toggle="on"
-          vg:color "${2}"
+        if [[ "$2" == "reset" ]]; then
+          colored=
         else
-          toggle=
-          vg:color reset
-          vg:color "${2}"
+          colored="${2}"
         fi
+        vg:color "${2}"
         shift
         ;;
       -n)
-        printf "${2}"
+        printf "%s" "${2}"
         shift
         ;;
+      -p)
+        vg:pretty_paths "${2}"
+        printf "\n"
+        shift
+        ;;
+      -r)
+        colored=
+        vg:color reset
+        ;;
       *)
-        printf "${1}\n"
+        printf "%s\n" "${1}"
         ;;
     esac
     shift
   done
 
-  [[ "${toggle}" == "on" ]] && vg:color reset || :
+  if [[ -n "${colored}" ]]; then
+    vg:color reset
+  fi
 }
 
 vg:config() {
   [[ ! ${verbose_mode} ]] && return || :
 
-  local name="${1}" val="${2}" pathname='$'"${3}" path="${4}"
-  local width1=12 width2=50 sep
+  local name="${1}" val="${2}" width1=12 width2=50 str
+
+  read -r str < <( vg:pretty_paths "${val}" ) || :
 
   vg:printfx -c bright-blue -n "|"
   printf " %-*s " ${width1} "${name}"
   vg:printfx -c bright-blue -n "|"
-  printf " %-*s " ${width2} "${val/$path/$pathname}"
+  printf " %-*s " ${width2} "${str}"
   vg:printfx -c bright-blue "|"
 }
 
 vg:success() {
-  if [[ $dryrun_mode ]]; then
+  if [[ $dryrun_mode ]] || [[ $quiet_mode ]]; then
     return
   fi
 
-  vg:printfx -c green "[SUCCESS]" -c reset " Plugin installed at ${target_path}"
+  vg:msg -c green -n "[SUCCESS]" -r -n " Plugin installed at: " -p "${target_path}"
+  printf "\n"
 }
 
 vg:debug() {
   vg:printfx -c yellow -n "DEBUG:" -c reset  -n " " "${@}"
+}
+
+vg:pretty_paths() {
+  local i str="$1" path shorthand
+
+  local -a paths=(                                 \
+    "${vim_plugins_dir}" '$VIM_PLUGINS_DIR'        \
+    "${user_vimdir}"     '$VIMDIR'                 \
+    "${user_pwd}"        '.'                       \
+    "${HOME}"            '~'                       \
+    "${TMPDIR%/}"        '$TMPDIR'                 \
+  )
+
+  for(( i=0; i < ${#paths[@]}; i+=2 )); do
+    path="${paths[$i]}"
+    shorthand="${paths[((i+1))]}"
+
+    if [[ "${str}" == "$path" ]]; then
+      continue
+    fi
+    str="${str/$path/$shorthand}"
+  done
+
+  printf "%s" "${str}"
 }
 
 #
@@ -351,7 +399,7 @@ vg:parse_uri() {
 
   vg:config "plugin-uri" "${uri}"
   vg:config "plugin-name" "${name}"
-  vg:config "target-dir" "${target_path}" "VIM_PLUGINS_DIR" "${vim_plugins_dir}"
+  vg:config "target-dir" "${target_path}"
 }
 
 # split -xyz into -x -y -z
@@ -409,6 +457,10 @@ vg:handle_args() {
   if [[ ${NO_COLOR} ]]; then
     color_mode="off"
   fi
+
+  if [[ ${verbose_mode} ]]; then
+    quiet_mode=
+  fi
 }
 
 #
@@ -418,23 +470,57 @@ vg:handle_args() {
 #
 
 vg:run() {
+  local ec cmd
+
+  vg:msg -c grey -p "> ${*}"
+
   if [[ $dryrun_mode ]]; then
-    vg:printfx -c grey "> ${*}"
     return
   fi
 
-  "${@}" || vg:die $code_fail "Command failed: ${*}"
+  "${@}" 2> "${errfile}" || ec=$?
+
+  if [[ $ec -ne 0 ]]; then
+    vg:die ${code_fail} "[$?] Command failed:" "${*}"
+  else
+    vg:print_errfile grey grey
+  fi
+}
+
+vg:print_errfile() {
+  if [[ ! -s "$errfile" ]]; then
+    return
+  fi
+
+  local spacer_color="$1" text_color="$2" force=$3
+
+  if [[ ${quiet_mode} ]] && [[ ! ${force} ]]; then
+    return
+  fi
+
+  # append a line in case the last line didn't
+  echo >> "${errfile}"
+
+  while read -r line; do
+    # skip blank lines
+    if [[ -z "${line// /}" ]]; then
+      continue
+    fi
+
+    vg:printfx -c "${spacer_color}" -n "| " -c "${text_color}" "$line"
+  done < "${errfile}"
+
+  # clear the file
+  echo > "${errfile}"
 }
 
 vg:fetch_plugin() {
-  local flag=""
-  [[ -n "${quiet_mode}" ]] && flag=" --quiet"
+  local noise_flag=""
+  [[ -n "${quiet_mode}" ]] && noise_flag="--quiet" || :
+  [[ -n "${verbose_mode}" ]] && noise_flag="--verbose" || :
 
-  vg:run cd "${vim_plugins_dir}"
-
-  vg:color grey
-  vg:run git clone ${flag} --depth 1 "${uri}"
-  vg:color reset
+  vg:run cd "${vim_plugins_dir}" && \
+    vg:run git clone ${noise_flag} --depth 1 "${uri}"
 }
 
 vg:helptags() {
@@ -443,7 +529,17 @@ vg:helptags() {
   fi
 
   while IFS= read -r -d $'\0' docpath ; do
-    vg:run vim -e -c ":helptags ${docpath}" -c ':q'
+
+    # -E -s   -- run in Ex mode but with "Entering Ex mode" messages silenced
+    # -C      -- run in compatible mode -- suppresses escape codes
+    # -u NONE -- like --clean but works for older vim versions
+    # -c redir >> ${errfile} -- appends any vim errors to our error file
+    vg:run vim -E -s -C -u NONE -c "redir >> ${errfile}" -c "helptags "${docpath} -c 'q'
+
+    if [[ ! -e "${docpath}/tags" ]]; then
+      vg:die $code_fail ":helptags failed for path:" "${docpath}"
+    fi
+
   done < <( find ${target_path} -type d -name doc -print0 )
 }
 
@@ -457,6 +553,7 @@ main() {
   local uri name target_path                               # final plugin details
 
   local version='0.2'
+  local user_pwd="${PWD}"
 
   # exit codes
   local code_suc=0      # success

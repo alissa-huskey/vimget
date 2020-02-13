@@ -52,11 +52,14 @@ Examples
  # use the same github URL that you would clone
  $ vimget https://github.com/vim-utils/vim-man.git
 
+ # so will github shorthand
+ $ vimget plasticboy/vim-markdown
+
  # non-github URIS will work too
  $ vimget git://sourceware.org/git/systemtap
 
- # anything that looks like *.git, *github.com* or
- # git://* will work
+ # anything that looks like *.git, *github.com*
+ # git://* or <username>/<repo_name> will work
  $ vimget /path/to/repo.git
  $ vimget ssh://github.com/path/to/repo
  $ vimget git://host.xz[:port]/~[user]/path/to/repo
