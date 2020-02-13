@@ -4,28 +4,20 @@
 `vimget` makes adding vim plugins fast and simple. Given a plugin repo URI it will clone it to your plugin dir and run `:helptags`. Intended for use with pathogen or Vim8+ packages.
 
 
-Install
----
-
-You can put `vimget` anywhere in your path. To install it globally:
-
-```bash
-  $ git clone https://github.com/alissa-huskey/vimget.git
-  $ cd vimget && sudo make install
-```
-
 Usage
 ---
 
 ```bash
-usage: vimget [-q|-n|-d-q] <repo-uri>
+usage: vimget [-d|-q|-n|-q|-V] <repo-uri> [[-n] <name>] [<repo-uri>...]
 
 options:
   -c | --no-color
   -d | --dry-run
   -q | --quiet
   -V | --verbose
+  -n | --name <name>
 ```
+
 
 Environment
 ---
@@ -63,6 +55,29 @@ Examples
  $ vimget /path/to/repo.git
  $ vimget ssh://github.com/path/to/repo
  $ vimget git://host.xz[:port]/~[user]/path/to/repo
+
+ # pass in a list of repos
+ $ vimget reedes/vim-pencil junegunn/goyo.vim junegunn/limelight.vim
+
+ # for a single plugin, you can specify an alternate name like you would in git
+ $ vimget aliou/bats.vim bats
+
+# or follow the repo uri with the -n flag in a list
+$ vimget tpope/vim-markdown spacevim/vim-markdown -n spacevim-markdown
+
+```
+
+
+Install
+---
+
+You can put `vimget` anywhere in your path.
+
+To install it globally:
+
+```bash
+  $ git clone https://github.com/alissa-huskey/vimget.git
+  $ cd vimget && sudo make install
 ```
 
 
@@ -77,9 +92,3 @@ Requirements
 - Vim with Pathogen, Vim8+ or Neovim with |+packages|
 
 > Note: this has only been tested on MacOS.
-
-
-Meta
----
-
- [github](https://github.com/alissa-huskey/vimget)

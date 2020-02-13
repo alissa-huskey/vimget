@@ -259,17 +259,18 @@ vg:msg() {
 }
 
 # colorize and format output
+# args:
 # -c <color>  -- print the following string(s) in color
 # -n <string> -- don't print a newline after <string>
-# printfx <string>
-# printfx -c <color> <sring>
-# printfx <string> <string> -c color <string> <string>
-# printfx -c <color> -n <string> -c <color> <string>
+# -p <string> -- make paths of <string> pretty
+# -r -- reset color
+# <string> -- just print the string followed by a newline
 vg:printfx() {
   local colored
 
   while [[ $# -ne 0 ]]; do
     case $1 in
+      # -c <color> -- set color
       -c)
         if [[ "$2" == "reset" ]]; then
           colored=
@@ -279,19 +280,23 @@ vg:printfx() {
         vg:color "${2}"
         shift
         ;;
+      # -n <string> -- don't follow with newline
       -n)
         printf "%s" "${2}"
         shift
         ;;
+      # -p <string> -- make paths of <string> pretty
       -p)
         vg:pretty_paths "${2}"
         printf "\n"
         shift
         ;;
+      # -r -- reset color
       -r)
         colored=
         vg:color reset
         ;;
+      # <string> -- just print the string followed by a newline
       *)
         printf "%s\n" "${1}"
         ;;
@@ -299,6 +304,7 @@ vg:printfx() {
     shift
   done
 
+  # reset the color if needed
   if [[ -n "${colored}" ]]; then
     vg:color reset
   fi
@@ -393,44 +399,46 @@ vg:name_matcher() {
 }
 
 #  */<name>.git
-vg:dot_git_uri_matcher() {
+vg:uri_matcher_dot_git() {
   sed -nE 's/^.*\/([^/]+).git[/]?$/\1/p' <<< "$1"
 }
 
 # *github.com/*/<name>
-vg:github_uri_matcher() {
+vg:uri_matcher_github() {
   sed -nE 's/^.*github\.com\/[^/]+\/([^/]+)[/]?$/\1/p' <<< "$1"
 }
 
 # git://.*/(<name>)
-vg:git_scheme_uri_matcher() {
+vg:uri_matcher_git_scheme() {
   sed -nE 's/^git:\/\/.+\/([^/]+)[/]?$/\1/p'<<< "${1#/}"
 }
 
 # <owner>/<name>
-vg:github_shorthand_uri_matcher() {
+vg:uri_matcher_github_shorthand() {
   sed -nE 's/^[^/]+\/([^/]+)$/\1/p'<<< "${1#/}"
+}
+
+vg:uri_matcher() {
+  for fun in dot_git github git_scheme github_shorthand; do
+    read -r repo_name < <("vg:uri_matcher_${fun}" "${1}") || :
+    if [[ -n "${repo_name}" ]]; then
+      break
+    fi
+  done
 }
 
 # parse - parse the plugin name from the repo uri
 #         and set global variables
 # usage: parse <url>
 vg:parse_uri() {
-  local input="${1}"
-
-  for fun in dot_git github git_scheme github_shorthand; do
-    read -r repo_name < <("vg:${fun}_uri_matcher" "${input}") || :
-    if [[ -n "${repo_name}" ]]; then
-      break
-    fi
-  done
+  vg:uri_matcher "${1}"
 
   if [[ -z "$repo_name" ]]; then
-    vg:die ${code_usr} "Unable to recognize URI: '${input}'." \
+    vg:die ${code_usr} "Unable to recognize URI: '${1}'." \
       "Expecting something that looks like *.git, *github.com* or git://*"
   fi
 
-  repo_uri="${input}"
+  repo_uri="${1}"
   target_path="${vim_plugins_dir}/${repo_name}"
 
   if [[ "$fun" == "github_shorthand" ]]; then
@@ -468,32 +476,14 @@ vg:handle_args() {
   while [[ $# -ne 0 ]]; do
     arg="$1"
     case "${arg}" in
-      ''|-h*|--h*|help)
-        usage
-        ;;
-      -d|--dry-run)
-        dryrun_mode="on"
-        ;;
-      -c|--no-color)
-        color_mode="off"
-        ;;
-      -q|--quiet)
-        quiet_mode="true"
-        ;;
-      -V|--verbose)
-        verbose_mode="true"
-        ;;
-      -n)
-        list+=( "${2}" )
-        shift
-        ;;
-      -*)
-        vg:err "invalid argument(s)"
-        usage ${code_usr}
-        ;;
-      *)
-        list+=( "${arg}" )
-        ;;
+    ''|-h*|--h*|help)  usage                                             ;;
+    -d|--dry-run)      dryrun_mode="on"                                  ;;
+    -c|--no-color)     color_mode="off"                                  ;;
+    -q|--quiet)        quiet_mode="true"                                 ;;
+    -V|--verbose)      verbose_mode="true"                               ;;
+    -n|--name)         list+=("${arg}")                                  ;;
+    -*)                vg:die ${code_usr} "unrecognized option: ${arg}"  ;;
+    *)                 list+=("${arg}")                                  ;;
     esac
     [[ $# -gt 0 ]] && shift || :
   done
@@ -506,11 +496,9 @@ vg:handle_args() {
     quiet_mode=
   fi
 
-  case ${#list[@]} in
-    0)
-      vg:die ${code_usr} "missing required argument: <repo-uri>"
-      ;;
-  esac
+  if [[ ${#list[@]} -eq 0 ]]; then
+    vg:die ${code_usr} "missing required argument: <repo-uri>"
+  fi
 }
 
 #
@@ -582,7 +570,7 @@ vg:validate_name() {
   fi
 }
 
-vg:get() {
+vg:get_plugin() {
   local repo_uri="$1"
   local repo_name target_path  # final plugin details
   plugin_name="$2"
@@ -601,6 +589,59 @@ vg:get() {
 
 #
 # }}} / job management
+
+vg:get_list() {
+  local repo
+
+  # handle vimpack <repo> <name>
+  if [[ $# -eq 2 ]]; then
+    vg:uri_matcher "${2}"
+
+    # but not if $2 looks like a uri
+    if [[ -z "$repo_name" ]]; then
+      vg:get_plugin "${@}"
+      return
+    fi
+  fi
+
+  while [[ $# -gt 0 ]]; do
+
+    case "${1}" in
+
+      # handle vimpack <repo> -n <name>
+      -n|--name)
+        if [[ -z "${repo}" ]]; then
+          vg:die ${code_usr} "Invaild arguments order." "-n <name> must come after <repo>"
+        fi
+
+        vg:get_plugin "${repo}" "${2}"
+        repo=
+        shift
+        ;;
+
+
+      # hang onto <repo> in case a -n arg is next
+      # if we have a repo from last time
+      # handle vimpack <repo>
+      *)
+        if [[ -n "${repo}" ]]; then
+          vg:get_plugin "${repo}"
+        fi
+
+        repo="${1}"
+        ;;
+
+    esac
+
+    [[ $# -gt 0 ]] && shift || :
+  done
+
+  # finally, process the last <repo> in the list
+  # handle vimpack <repo>
+  if [[ -n "${repo}" ]]; then
+    vg:get_plugin "${repo}"
+  fi
+}
 
 main() {
   local color_mode=on dryrun_mode quiet_mode verbose_mode  # modes
@@ -621,7 +662,7 @@ main() {
   vg:handle_args "${args[@]}"
   vg:check_env
 
-  vg:get "${list[@]}"
+  vg:get_list "${list[@]}"
 
   return ${code_suc}
 }

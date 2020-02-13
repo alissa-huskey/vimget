@@ -184,11 +184,20 @@ teardown() {
 }
 
 @test "vimget <repo> <repo>" {
-  skip
+  run ${rootdir}/vimget --dry-run jez/vim-superman vim-utils/vim-man
+
+  assert_success
+  assert_line "> git clone --depth 1 https://github.com/jez/vim-superman"
+  assert_line "> git clone --depth 1 https://github.com/vim-utils/vim-man"
 }
 
-@test "vimget <repo> -n <name> <repo> -n <name>" {
-  skip
+@test "vimget <repo> -n <name> <repo> -n <name> <repo>" {
+  run ${rootdir}/vimget --dry-run jez/vim-superman -n superman vim-utils/vim-man -n man mzlogin/vim-markdown-toc
+
+  assert_success
+  assert_line "> git clone --depth 1 https://github.com/jez/vim-superman superman"
+  assert_line "> git clone --depth 1 https://github.com/vim-utils/vim-man man"
+  assert_line "> git clone --depth 1 https://github.com/mzlogin/vim-markdown-toc"
 }
 
 @test "echo <repo> -n <name> <repo> -n <name> | vimget" {
@@ -309,7 +318,7 @@ teardown() {
 # behavior {{{
 #
 
-@test "verify -- plugin added, helptags genrated" {
+@test "verify -- plugin added, helptags generated" {
   run ${rootdir}/vimget https://github.com/plasticboy/vim-markdown
 
   assert_success
